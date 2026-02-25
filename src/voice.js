@@ -46,12 +46,16 @@ export async function startVoiceSession(channel) {
     realtimeReady = true
 
     ws.send(JSON.stringify({
-      type: "session.update",
-      session: {
-        modalities: ["audio"],
-        instructions: "Respond in Hindi in a natural human tone."
-      }
-    }))
+  type: "session.update",
+  session: {
+    modalities: ["audio"],
+    instructions: "Respond in Hindi in a natural human tone.",
+    output_audio_format: {
+      type: "pcm16",
+      sample_rate: 24000
+    }
+  }
+}))
   })
 
   ws.on("error", (err) => {
