@@ -2,23 +2,26 @@ import {
   joinVoiceChannel,
   createAudioPlayer,
   createAudioResource,
-  AudioPlayerStatus,
+  StreamType,
   getVoiceConnection,
   EndBehaviorType
 } from "@discordjs/voice"
 
 import prism from "prism-media"
 import WebSocket from "ws"
+import { Readable } from "stream"
 
 let connection
 let player
 let ws
 let active = false
+let realtimeReady = false
 
 export async function startVoiceSession(channel) {
 
   if (active) return
   active = true
+  realtimeReady = false
 
   connection = joinVoiceChannel({
     channelId: channel.id,
@@ -29,8 +32,9 @@ export async function startVoiceSession(channel) {
   player = createAudioPlayer()
   connection.subscribe(player)
 
+  // ✅ Using gpt-realtime-1.5
   ws = new WebSocket(
-    "wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview",
+    "wss://api.openai.com/v1/realtime?model=gpt-realtime-1.5",
     {
       headers: {
         "Authorization": `Bearer ${process.env.OPENAI_API_KEY}`
@@ -40,21 +44,46 @@ export async function startVoiceSession(channel) {
 
   ws.on("open", () => {
     console.log("Realtime connected.")
+    realtimeReady = true
+
+    // Optional but good practice
+    ws.send(JSON.stringify({
+      type: "session.update",
+      session: {
+        modalities: ["audio"],
+        instructions: "Respond in Hindi. Natural tone."
+      }
+    }))
   })
 
-  ws.on("message", (data) => {
-    const msg = JSON.parse(data.toString())
+  ws.on("error", console.error)
 
-    if (msg.type === "response.output_audio.delta") {
-      const audio = Buffer.from(msg.delta, "base64")
-      const resource = createAudioResource(audio)
-      player.play(resource)
+  ws.on("message", (data) => {
+    try {
+      const msg = JSON.parse(data.toString())
+
+      if (msg.type === "response.output_audio.delta") {
+        const audioBuffer = Buffer.from(msg.delta, "base64")
+
+        const stream = Readable.from(audioBuffer)
+
+        const resource = createAudioResource(stream, {
+          inputType: StreamType.Raw
+        })
+
+        player.play(resource)
+      }
+
+    } catch (err) {
+      console.error("WS message error:", err)
     }
   })
 
   const receiver = connection.receiver
 
-  connection.receiver.speaking.on("start", (userId) => {
+  receiver.speaking.on("start", (userId) => {
+
+    if (!realtimeReady) return
 
     const opusStream = receiver.subscribe(userId, {
       end: {
@@ -72,15 +101,20 @@ export async function startVoiceSession(channel) {
     )
 
     pcmStream.on("data", (chunk) => {
-      const base64 = chunk.toString("base64")
+
+      if (!realtimeReady) return
+      if (ws.readyState !== 1) return
 
       ws.send(JSON.stringify({
         type: "input_audio_buffer.append",
-        audio: base64
+        audio: chunk.toString("base64")
       }))
     })
 
     pcmStream.on("end", () => {
+
+      if (!realtimeReady) return
+
       ws.send(JSON.stringify({
         type: "input_audio_buffer.commit"
       }))
@@ -89,6 +123,8 @@ export async function startVoiceSession(channel) {
         type: "response.create"
       }))
     })
+
+    pcmStream.on("error", console.error)
   })
 }
 
@@ -102,4 +138,5 @@ export function stopVoiceSession() {
   }
 
   active = false
+  realtimeReady = false
 }
