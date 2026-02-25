@@ -71,54 +71,53 @@ export async function startVoiceSession(channel) {
   ws.on("message", (data) => {
     try {
       const msg = JSON.parse(data.toString())
-      console.log("OPENAI:", msg.type)
+      console.log("OPENAI RAW:", msg)
+if (msg.type === "response.created") {
 
-      if (msg.type === "response.created") {
+  inputStream = new PassThrough()
 
-        inputStream = new PassThrough()
+  ffmpeg = new prism.FFmpeg({
+    args: [
+      "-f", "s16le",
+      "-ar", "24000",
+      "-ac", "1",
+      "-i", "pipe:0",
+      "-ar", "48000",
+      "-ac", "2",
+      "-f", "s16le",
+      "pipe:1"
+    ]
+  })
 
-        ffmpeg = new prism.FFmpeg({
-          args: [
-            "-f", "s16le",
-            "-ar", "48000",
-            "-ac", "1",
-            "-i", "pipe:0",
-            "-ar", "48000",
-            "-ac", "2",
-            "-f", "s16le",
-            "pipe:1"
-          ]
-        })
+  opusEncoder = new prism.opus.Encoder({
+    frameSize: 960,
+    channels: 2,
+    rate: 48000
+  })
 
-        opusEncoder = new prism.opus.Encoder({
-          frameSize: 960,
-          channels: 2,
-          rate: 48000
-        })
+  const opusStream = inputStream
+    .pipe(ffmpeg)
+    .pipe(opusEncoder)
 
-        const opusStream = inputStream
-          .pipe(ffmpeg)
-          .pipe(opusEncoder)
+  const resource = createAudioResource(opusStream, {
+    inputType: StreamType.Opus
+  })
 
-        const resource = createAudioResource(opusStream, {
-          inputType: StreamType.Opus
-        })
+  player.play(resource)
+}
 
-        player.play(resource)
-      }
+if (msg.type === "response.output_audio.delta") {
+  if (!inputStream) return
+  const chunk = Buffer.from(msg.delta, "base64")
+  inputStream.write(chunk)
+}
 
-      if (msg.type === "response.output_audio.delta") {
-        if (!inputStream) return
-        const chunk = Buffer.from(msg.delta, "base64")
-        inputStream.write(chunk)
-      }
-
-      if (msg.type === "response.completed") {
-        if (inputStream) {
-          inputStream.end()
-          inputStream = null
-        }
-      }
+if (msg.type === "response.output_audio.done") {
+  if (inputStream) {
+    inputStream.end()
+    inputStream = null
+  }
+}
 
     } catch (err) {
       console.error("Playback error:", err)
