@@ -10,6 +10,7 @@ import {
 import prism from "prism-media"
 import WebSocket from "ws"
 import { PassThrough } from "stream"
+import { Readable } from "stream"
 
 let connection
 let player
@@ -67,67 +68,29 @@ export async function startVoiceSession(channel) {
   })
 
   // ===== PLAYBACK PIPELINE =====
-
-  let inputStream = null
-let ffmpeg = null
-let opusEncoder = null
-
 ws.on("message", (data) => {
   try {
     const msg = JSON.parse(data.toString())
-    console.log("OPENAI:", msg.type)
 
     if (msg.type === "response.output_audio.delta") {
 
-      if (!inputStream) {
-        inputStream = new PassThrough()
+      const pcm = Buffer.from(msg.delta, "base64")
 
-        ffmpeg = new prism.FFmpeg({
-          args: [
-            "-f", "s16le",
-            "-ar", "24000",
-            "-ac", "1",
-            "-i", "pipe:0",
-            "-ar", "48000",
-            "-ac", "2",
-            "-f", "s16le",
-            "pipe:1"
-          ]
-        })
+      const resource = createAudioResource(
+        Readable.from(pcm),
+        {
+          inputType: StreamType.Raw,
+          inlineVolume: false
+        }
+      )
 
-        opusEncoder = new prism.opus.Encoder({
-          frameSize: 960,
-          channels: 2,
-          rate: 48000
-        })
-
-        const opusStream = inputStream
-          .pipe(ffmpeg)
-          .pipe(opusEncoder)
-
-        const resource = createAudioResource(opusStream, {
-          inputType: StreamType.Opus
-        })
-
-        player.play(resource)
-      }
-
-      const chunk = Buffer.from(msg.delta, "base64")
-      inputStream.write(chunk)
-    }
-
-    if (msg.type === "response.output_audio.done") {
-      if (inputStream) {
-        inputStream.end()
-        inputStream = null
-      }
+      player.play(resource)
     }
 
   } catch (err) {
     console.error("Playback error:", err)
   }
 })
-
   // ===== INPUT CAPTURE =====
 
   const receiver = connection.receiver
