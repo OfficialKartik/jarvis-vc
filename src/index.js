@@ -23,7 +23,7 @@ export const manager = new LavalinkManager({
       id: "jarvis-node",
       host: "127.0.0.1",
       port: 2333,
-      password: "jarvispass",
+      authorization: "jarvispass",
       secure: false
     }
   ],
