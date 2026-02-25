@@ -65,7 +65,9 @@ export async function startVoiceSession(channel) {
 
 
 
-let pcmStream = null
+let inputStream = null
+let ffmpeg = null
+let opusEncoder = null
 
 ws.on("message", (data) => {
   try {
@@ -73,39 +75,48 @@ ws.on("message", (data) => {
 
     if (msg.type === "response.created") {
 
-      pcmStream = new PassThrough()
+      inputStream = new PassThrough()
 
-      const resource = createAudioResource(pcmStream, {
-        inputType: StreamType.Raw,
-        inlineVolume: false
+      ffmpeg = new prism.FFmpeg({
+        args: [
+          "-f", "s16le",
+          "-ar", "24000",
+          "-ac", "1",
+          "-i", "pipe:0",
+          "-ar", "48000",
+          "-ac", "2",
+          "-f", "s16le",
+          "pipe:1"
+        ]
+      })
+
+      opusEncoder = new prism.opus.Encoder({
+        frameSize: 960,
+        channels: 2,
+        rate: 48000
+      })
+
+      const opusStream = inputStream
+        .pipe(ffmpeg)
+        .pipe(opusEncoder)
+
+      const resource = createAudioResource(opusStream, {
+        inputType: StreamType.Opus
       })
 
       player.play(resource)
     }
 
     if (msg.type === "response.output_audio.delta") {
-      if (!pcmStream) return
-
+      if (!inputStream) return
       const chunk = Buffer.from(msg.delta, "base64")
-
-      // Convert 24kHz mono → 48kHz stereo manually
-      const converted = Buffer.alloc(chunk.length * 4)
-
-      for (let i = 0; i < chunk.length; i += 2) {
-        const sample = chunk.readInt16LE(i)
-
-        // duplicate sample for stereo
-        converted.writeInt16LE(sample, i * 2)
-        converted.writeInt16LE(sample, i * 2 + 2)
-      }
-
-      pcmStream.write(converted)
+      inputStream.write(chunk)
     }
 
     if (msg.type === "response.completed") {
-      if (pcmStream) {
-        pcmStream.end()
-        pcmStream = null
+      if (inputStream) {
+        inputStream.end()
+        inputStream = null
       }
     }
 
