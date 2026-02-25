@@ -62,62 +62,50 @@ export async function startVoiceSession(channel) {
 
 
 
-let outputStream = null
-let ffmpeg = null
-let opusEncoder = null
+
+
+
+let pcmStream = null
 
 ws.on("message", (data) => {
   try {
     const msg = JSON.parse(data.toString())
 
-    // 🔹 When a new response starts
     if (msg.type === "response.created") {
 
-      outputStream = new PassThrough()
+      pcmStream = new PassThrough()
 
-      ffmpeg = new prism.FFmpeg({
-        args: [
-          "-f", "s16le",
-          "-ar", "24000",
-          "-ac", "1",
-          "-i", "pipe:0",
-          "-ar", "48000",
-          "-ac", "2",
-          "-f", "s16le",
-          "pipe:1"
-        ]
-      })
-
-      opusEncoder = new prism.opus.Encoder({
-        frameSize: 960,
-        channels: 2,
-        rate: 48000
-      })
-
-      const opusStream = outputStream
-        .pipe(ffmpeg)
-        .pipe(opusEncoder)
-
-      const resource = createAudioResource(opusStream, {
-        inputType: StreamType.Opus
+      const resource = createAudioResource(pcmStream, {
+        inputType: StreamType.Raw,
+        inlineVolume: false
       })
 
       player.play(resource)
     }
 
-    // 🔹 Audio chunks
     if (msg.type === "response.output_audio.delta") {
-      if (outputStream) {
-        const audioBuffer = Buffer.from(msg.delta, "base64")
-        outputStream.write(audioBuffer)
+      if (!pcmStream) return
+
+      const chunk = Buffer.from(msg.delta, "base64")
+
+      // Convert 24kHz mono → 48kHz stereo manually
+      const converted = Buffer.alloc(chunk.length * 4)
+
+      for (let i = 0; i < chunk.length; i += 2) {
+        const sample = chunk.readInt16LE(i)
+
+        // duplicate sample for stereo
+        converted.writeInt16LE(sample, i * 2)
+        converted.writeInt16LE(sample, i * 2 + 2)
       }
+
+      pcmStream.write(converted)
     }
 
-    // 🔹 When response ends
     if (msg.type === "response.completed") {
-      if (outputStream) {
-        outputStream.end()
-        outputStream = null
+      if (pcmStream) {
+        pcmStream.end()
+        pcmStream = null
       }
     }
 
@@ -125,7 +113,6 @@ ws.on("message", (data) => {
     console.error("Playback error:", err)
   }
 })
-
   const receiver = connection.receiver
 
   receiver.speaking.on("start", (userId) => {
