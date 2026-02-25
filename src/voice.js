@@ -9,7 +9,7 @@ import {
 
 import prism from "prism-media"
 import WebSocket from "ws"
-import { Readable } from "stream"
+import { PassThrough } from "stream"
 
 let connection
 let player
@@ -60,37 +60,43 @@ export async function startVoiceSession(channel) {
 
   
 
+
+
+let outputStream = null
+let ffmpeg = null
+let opusEncoder = null
+
 ws.on("message", (data) => {
   try {
     const msg = JSON.parse(data.toString())
 
-    if (msg.type === "response.output_audio.delta") {
+    // 🔹 When a new response starts
+    if (msg.type === "response.created") {
 
-      const audioBuffer = Buffer.from(msg.delta, "base64")
+      outputStream = new PassThrough()
 
-      const stream = Readable.from(audioBuffer)
+      ffmpeg = new prism.FFmpeg({
+        args: [
+          "-f", "s16le",
+          "-ar", "24000",
+          "-ac", "1",
+          "-i", "pipe:0",
+          "-ar", "48000",
+          "-ac", "2",
+          "-f", "s16le",
+          "pipe:1"
+        ]
+      })
 
-      const resampled = stream
-        .pipe(new prism.FFmpeg({
-          args: [
-            "-f", "s16le",
-            "-ar", "24000",
-            "-ac", "1",
-            "-i", "pipe:0",
-            "-ar", "48000",
-            "-ac", "2",
-            "-f", "s16le",
-            "pipe:1"
-          ]
-        }))
+      opusEncoder = new prism.opus.Encoder({
+        frameSize: 960,
+        channels: 2,
+        rate: 48000
+      })
 
-      const opusStream = resampled.pipe(
-        new prism.opus.Encoder({
-          frameSize: 960,
-          channels: 2,
-          rate: 48000
-        })
-      )
+      const opusStream = outputStream
+        .pipe(ffmpeg)
+        .pipe(opusEncoder)
 
       const resource = createAudioResource(opusStream, {
         inputType: StreamType.Opus
@@ -99,8 +105,24 @@ ws.on("message", (data) => {
       player.play(resource)
     }
 
+    // 🔹 Audio chunks
+    if (msg.type === "response.output_audio.delta") {
+      if (outputStream) {
+        const audioBuffer = Buffer.from(msg.delta, "base64")
+        outputStream.write(audioBuffer)
+      }
+    }
+
+    // 🔹 When response ends
+    if (msg.type === "response.completed") {
+      if (outputStream) {
+        outputStream.end()
+        outputStream = null
+      }
+    }
+
   } catch (err) {
-    console.error(err)
+    console.error("Playback error:", err)
   }
 })
 
