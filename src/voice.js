@@ -58,7 +58,7 @@ export async function startVoiceSession(channel) {
 
   ws.on("error", console.error)
 
-  import { Readable } from "stream"
+  
 
 ws.on("message", (data) => {
   try {
