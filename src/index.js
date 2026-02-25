@@ -23,7 +23,7 @@ export const manager = new LavalinkManager({
       id: "jarvis-node",
       host: "127.0.0.1",
       port: 2333,
-      authorization: "jarvispass",
+      authorization: "jarvispass", // MUST match application.yml
       secure: false
     }
   ],
@@ -33,7 +33,25 @@ export const manager = new LavalinkManager({
   }
 })
 
-client.on("raw", (d) => manager.updateVoiceState(d))
+/* ===== Lavalink Events ===== */
+
+manager.on("nodeConnect", (node) => {
+  console.log(`✅ Lavalink connected: ${node.id}`)
+})
+
+manager.on("nodeError", (node, error) => {
+  console.error(`❌ Lavalink error (${node.id}):`, error)
+})
+
+/* ===== Voice State Forwarding ===== */
+
+client.on("raw", (packet) => {
+  manager.handleVoiceUpdate(packet)
+})
+
+/* ===========================
+   Client Ready
+=========================== */
 
 client.once("ready", async () => {
   console.log(`Logged in as ${client.user.tag}`)
@@ -42,7 +60,7 @@ client.once("ready", async () => {
 })
 
 /* ===========================
-   SIMPLE JOIN COMMAND
+   SIMPLE COMMANDS
 =========================== */
 
 client.on("interactionCreate", async (interaction) => {
@@ -51,17 +69,21 @@ client.on("interactionCreate", async (interaction) => {
   if (interaction.commandName === "join") {
 
     const member = interaction.member
-    const voiceChannel = member.voice.channel
+    const voiceChannel = member.voice?.channel
 
     if (!voiceChannel)
-      return interaction.reply({ content: "Join a voice channel first.", ephemeral: true })
+      return interaction.reply({
+        content: "Join a voice channel first.",
+        ephemeral: true
+      })
 
     await interaction.reply("Jarvis joining...")
 
     const player = manager.createPlayer({
       guildId: interaction.guildId,
       voiceChannelId: voiceChannel.id,
-      textChannelId: interaction.channelId
+      textChannelId: interaction.channelId,
+      selfDeaf: false
     })
 
     await player.connect()
@@ -71,13 +93,17 @@ client.on("interactionCreate", async (interaction) => {
 
     await interaction.reply("Processing...")
 
-    // Collect AI output (after you've committed input audio)
-    const pcm = collectOutput()
-    const mp3 = await pcmToMp3(pcm)
+    try {
+      const pcm = collectOutput()
+      const mp3 = await pcmToMp3(pcm)
 
-    await playBuffer(interaction.guildId, mp3)
+      await playBuffer(interaction.guildId, mp3)
 
-    await interaction.editReply("Done.")
+      await interaction.editReply("Done.")
+    } catch (err) {
+      console.error("Ask error:", err)
+      await interaction.editReply("Error while processing.")
+    }
   }
 })
 
