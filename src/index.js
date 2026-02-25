@@ -1,3 +1,4 @@
+import "@snazzah/davey/register"
 import "dotenv/config"
 import { Client, GatewayIntentBits } from "discord.js"
 import { startVoiceSession, stopVoiceSession } from "./voice.js"
