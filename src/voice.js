@@ -58,26 +58,51 @@ export async function startVoiceSession(channel) {
 
   ws.on("error", console.error)
 
-  ws.on("message", (data) => {
-    try {
-      const msg = JSON.parse(data.toString())
+  import { Readable } from "stream"
 
-      if (msg.type === "response.output_audio.delta") {
-        const audioBuffer = Buffer.from(msg.delta, "base64")
+ws.on("message", (data) => {
+  try {
+    const msg = JSON.parse(data.toString())
 
-        const stream = Readable.from(audioBuffer)
+    if (msg.type === "response.output_audio.delta") {
 
-        const resource = createAudioResource(stream, {
-          inputType: StreamType.Raw
+      const audioBuffer = Buffer.from(msg.delta, "base64")
+
+      const stream = Readable.from(audioBuffer)
+
+      const resampled = stream
+        .pipe(new prism.FFmpeg({
+          args: [
+            "-f", "s16le",
+            "-ar", "24000",
+            "-ac", "1",
+            "-i", "pipe:0",
+            "-ar", "48000",
+            "-ac", "2",
+            "-f", "s16le",
+            "pipe:1"
+          ]
+        }))
+
+      const opusStream = resampled.pipe(
+        new prism.opus.Encoder({
+          frameSize: 960,
+          channels: 2,
+          rate: 48000
         })
+      )
 
-        player.play(resource)
-      }
+      const resource = createAudioResource(opusStream, {
+        inputType: StreamType.Opus
+      })
 
-    } catch (err) {
-      console.error("WS message error:", err)
+      player.play(resource)
     }
-  })
+
+  } catch (err) {
+    console.error(err)
+  }
+})
 
   const receiver = connection.receiver
 
