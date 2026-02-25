@@ -32,7 +32,6 @@ export async function startVoiceSession(channel) {
   player = createAudioPlayer()
   connection.subscribe(player)
 
-  // ✅ Using gpt-realtime-1.5
   ws = new WebSocket(
     "wss://api.openai.com/v1/realtime?model=gpt-realtime-1.5",
     {
@@ -46,94 +45,100 @@ export async function startVoiceSession(channel) {
     console.log("Realtime connected.")
     realtimeReady = true
 
-    // Optional but good practice
     ws.send(JSON.stringify({
       type: "session.update",
       session: {
         modalities: ["audio"],
-        instructions: "Respond in Hindi. Natural tone."
+        instructions: "Respond in Hindi in a natural human tone."
       }
     }))
   })
 
-  ws.on("error", console.error)
+  ws.on("error", (err) => {
+    console.error("WS ERROR:", err)
+  })
 
-  
+  ws.on("close", () => {
+    console.log("WS closed")
+  })
 
+  // ===== PLAYBACK PIPELINE =====
 
+  let inputStream = null
+  let ffmpeg = null
+  let opusEncoder = null
 
+  ws.on("message", (data) => {
+    try {
+      const msg = JSON.parse(data.toString())
+      console.log("OPENAI:", msg.type)
 
+      if (msg.type === "response.created") {
 
+        inputStream = new PassThrough()
 
-let inputStream = null
-let ffmpeg = null
-let opusEncoder = null
+        ffmpeg = new prism.FFmpeg({
+          args: [
+            "-f", "s16le",
+            "-ar", "24000",
+            "-ac", "1",
+            "-i", "pipe:0",
+            "-ar", "48000",
+            "-ac", "2",
+            "-f", "s16le",
+            "pipe:1"
+          ]
+        })
 
-ws.on("message", (data) => {
-  try {
-    const msg = JSON.parse(data.toString())
+        opusEncoder = new prism.opus.Encoder({
+          frameSize: 960,
+          channels: 2,
+          rate: 48000
+        })
 
-    if (msg.type === "response.created") {
+        const opusStream = inputStream
+          .pipe(ffmpeg)
+          .pipe(opusEncoder)
 
-      inputStream = new PassThrough()
+        const resource = createAudioResource(opusStream, {
+          inputType: StreamType.Opus
+        })
 
-      ffmpeg = new prism.FFmpeg({
-        args: [
-          "-f", "s16le",
-          "-ar", "24000",
-          "-ac", "1",
-          "-i", "pipe:0",
-          "-ar", "48000",
-          "-ac", "2",
-          "-f", "s16le",
-          "pipe:1"
-        ]
-      })
-
-      opusEncoder = new prism.opus.Encoder({
-        frameSize: 960,
-        channels: 2,
-        rate: 48000
-      })
-
-      const opusStream = inputStream
-        .pipe(ffmpeg)
-        .pipe(opusEncoder)
-
-      const resource = createAudioResource(opusStream, {
-        inputType: StreamType.Opus
-      })
-
-      player.play(resource)
-    }
-
-    if (msg.type === "response.output_audio.delta") {
-      if (!inputStream) return
-      const chunk = Buffer.from(msg.delta, "base64")
-      inputStream.write(chunk)
-    }
-
-    if (msg.type === "response.completed") {
-      if (inputStream) {
-        inputStream.end()
-        inputStream = null
+        player.play(resource)
       }
-    }
 
-  } catch (err) {
-    console.error("Playback error:", err)
-  }
-})
+      if (msg.type === "response.output_audio.delta") {
+        if (!inputStream) return
+        const chunk = Buffer.from(msg.delta, "base64")
+        inputStream.write(chunk)
+      }
+
+      if (msg.type === "response.completed") {
+        if (inputStream) {
+          inputStream.end()
+          inputStream = null
+        }
+      }
+
+    } catch (err) {
+      console.error("Playback error:", err)
+    }
+  })
+
+  // ===== INPUT CAPTURE =====
+
   const receiver = connection.receiver
 
   receiver.speaking.on("start", (userId) => {
 
     if (!realtimeReady) return
 
+    console.log("User speaking:", userId)
+
     const opusStream = receiver.subscribe(userId, {
       end: {
         behavior: EndBehaviorType.AfterSilence,
-        duration: 1000
+        duration: 1500 // increased silence
       }
     })
 
@@ -159,6 +164,8 @@ ws.on("message", (data) => {
     pcmStream.on("end", () => {
 
       if (!realtimeReady) return
+
+      console.log("Audio committed")
 
       ws.send(JSON.stringify({
         type: "input_audio_buffer.commit"
