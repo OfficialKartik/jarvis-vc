@@ -1,39 +1,83 @@
-import "@snazzah/davey"
 import "dotenv/config"
-import { Client, GatewayIntentBits } from "discord.js"
-import { startVoiceSession, stopVoiceSession } from "./voice.js"
+import { Client, GatewayIntentBits, Partials } from "discord.js"
+import { LavalinkManager } from "lavalink-client"
+import { pcmToMp3 } from "./audioProcessor.js"
+import { startRealtime, collectOutput } from "./openaiRealtime.js"
+import { playBuffer } from "./voiceTransport.js"
 
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildVoiceStates,
-    GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent
-  ]
+    GatewayIntentBits.GuildVoiceStates
+  ],
+  partials: [Partials.Channel]
 })
 
-client.once("ready", () => {
-  console.log("Jarvis realtime online.")
+/* ===========================
+   Lavalink Setup
+=========================== */
+
+export const manager = new LavalinkManager({
+  nodes: [
+    {
+      id: "jarvis-node",
+      host: "127.0.0.1",
+      port: 2333,
+      password: "jarvispass",
+      secure: false
+    }
+  ],
+  sendToShard: (guildId, payload) => {
+    const guild = client.guilds.cache.get(guildId)
+    if (guild) guild.shard.send(payload)
+  }
 })
 
-client.on("messageCreate", async (message) => {
-  if (message.author.bot) return
-  if (!message.content.startsWith(",")) return
+client.on("raw", (d) => manager.updateVoiceState(d))
 
-  const args = message.content.slice(1).split(" ")
-  const cmd = args[0]
+client.once("ready", async () => {
+  console.log(`Logged in as ${client.user.tag}`)
+  await manager.init(client.user.id)
+  startRealtime()
+})
 
-  if (cmd === "jarvis" && args[1] === "convo") {
-    if (!message.member.voice.channel)
-      return message.reply("VC join karo pehle.")
+/* ===========================
+   SIMPLE JOIN COMMAND
+=========================== */
 
-    await startVoiceSession(message.member.voice.channel)
-    return message.reply("Jarvis joined VC.")
+client.on("interactionCreate", async (interaction) => {
+  if (!interaction.isChatInputCommand()) return
+
+  if (interaction.commandName === "join") {
+
+    const member = interaction.member
+    const voiceChannel = member.voice.channel
+
+    if (!voiceChannel)
+      return interaction.reply({ content: "Join a voice channel first.", ephemeral: true })
+
+    await interaction.reply("Jarvis joining...")
+
+    const player = manager.createPlayer({
+      guildId: interaction.guildId,
+      voiceChannelId: voiceChannel.id,
+      textChannelId: interaction.channelId
+    })
+
+    await player.connect()
   }
 
-  if (cmd === "jarvis" && args[1] === "off") {
-    stopVoiceSession()
-    return message.reply("Jarvis left VC.")
+  if (interaction.commandName === "ask") {
+
+    await interaction.reply("Processing...")
+
+    // Collect AI output (after you've committed input audio)
+    const pcm = collectOutput()
+    const mp3 = await pcmToMp3(pcm)
+
+    await playBuffer(interaction.guildId, mp3)
+
+    await interaction.editReply("Done.")
   }
 })
 
