@@ -120,8 +120,8 @@ ws.on("message", (data) => {
       inputStream.end()
       inputStream = null
     }
-  }
-})
+  
+
     } catch (err) {
       console.error("Playback error:", err)
     }
