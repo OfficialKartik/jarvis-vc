@@ -27,7 +27,9 @@ export async function startVoiceSession(channel) {
   connection = joinVoiceChannel({
     channelId: channel.id,
     guildId: channel.guild.id,
-    adapterCreator: channel.guild.voiceAdapterCreator
+    adapterCreator: channel.guild.voiceAdapterCreator,
+    selfDeaf: false,
+    selfMute: false
   })
 
   player = createAudioPlayer()
